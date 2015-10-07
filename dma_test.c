@@ -1,26 +1,16 @@
-/****a* simple.c/simple_summary
+/**** dma_test.c/simple_summary ****
 *
 * SUMMARY
-*  sample SpiNNaker API application
+*  SDRAM testing using CRCs (based on simple.c by Luis Plana)
 *
 * AUTHOR
-*  Luis Plana - luis.plana@manchester.ac.uk
+*  Patrick Camilleri
 *
 * DETAILS
-*  Created on       : 03 May 2011
-*  Version          : $Revision: 1196 $
-*  Last modified on : $Date: 2011-06-27 14:32:29 +0100 (Mon, 27 Jun 2011) $
-*  Last modified by : $Author: plana $
-*  $Id: simple.c 1196 2011-06-27 13:32:29Z plana $
-*  $HeadURL: file:///home/amulinks/spinnaker/svn/spinn_api/trunk/examples/simple.c $
+*  Created on       : 28 September 2015
+*  Version          : Revision: 1
 *
-* COPYRIGHT
-*  Copyright (c) The University of Manchester, 2011. All rights reserved.
-*  SpiNNaker Project
-*  Advanced Processor Technologies Group
-*  School of Computer Science
-*
-*******/
+*************************************/
 
 // SpiNNaker API
 
@@ -41,7 +31,7 @@
 #define NODEBUG
 
 // ------------------------------------------------------------------------
-// variablesqueu
+// variables
 // ------------------------------------------------------------------------
 
 uint coreID;
@@ -70,7 +60,72 @@ uint sdram_tmp;
 
 dma_queue_t dma_queue;
 
-/****f* simple.c/app_init
+void app_init ();
+void app_done ();
+void send_packets (uint ticks, uint none);
+void flip_led (uint ticks, uint null);
+void reverse(char *s, int len);
+uint itoa(uint num, char s[], uint len);
+void ftoa(float n, char *res, int precision);
+void do_transfer (uint val, uint none);
+void count_packets (uint key, uint payload);
+void check_memcopy(uint tid, uint ttag);
+void configure_crc_tables(void);
+
+
+/****** dma_test.c/c_main
+*
+* SUMMARY
+*  This function is called at application start-up.
+*  It is used to register event callbacks and begin the simulation.
+*
+* SYNOPSIS
+*  int c_main()
+*
+* SOURCE
+*/
+void c_main()
+{
+  // Get core and chip IDs
+
+  coreID = spin1_get_core_id ();
+  chipID = spin1_get_chip_id ();
+
+  // Setup CRC tables
+  configure_crc_tables();
+
+  io_printf (IO_BUF, ">> dma_test - chip (%d, %d) core %d\n",
+	     chipID >> 8, chipID & 255, coreID);
+
+  // set timer tick value (in microseconds)
+
+  spin1_set_timer_tick (TIMER_TICK_PERIOD);
+
+  // register callbacks
+
+  spin1_callback_on (MCPL_PACKET_RECEIVED, count_packets, -1);
+  //spin1_callback_on (DMA_TRANSFER_DONE, check_memcopy, 0);
+  spin1_callback_on (USER_EVENT, send_packets, 2);
+  spin1_callback_on (TIMER_TICK, flip_led, 3);
+
+  // initialize application
+
+  app_init ();
+
+  // go
+
+  spin1_start (SYNC_WAIT);
+
+  // report results
+
+  app_done ();
+}
+/*
+*******/
+
+
+
+/****f* dma_test.c/app_init
 *
 * SUMMARY
 *  This function is called at application start-up.
@@ -149,7 +204,7 @@ void app_init ()
 *******/
 
 
-/****f* simple.c/app_done
+/****f* dma_test.c/app_done
 *
 * SUMMARY
 *  This function is called at application exit.
@@ -202,7 +257,7 @@ void app_done ()
 *******/
 
 
-/****f* simple.c/send_packets
+/****f* dma_test.c/send_packets
 *
 * SUMMARY
 *  This function is used by a core to send packets to itself.
@@ -230,7 +285,7 @@ void send_packets (uint ticks, uint none)
 *******/
 
 
-/****f* simple.c/flip_led
+/****f* dma_test.c/flip_led
 *
 * SUMMARY
 *  This function is used as a callback for timer tick events.
@@ -337,7 +392,7 @@ void ftoa(float n, char *res, int precision)
   }
 }
 
-/****f* simple.c/do_transfer
+/****f* dma_test.c/do_transfer
 *
 * SUMMARY
 *  This function is used as a task example
@@ -442,7 +497,7 @@ void do_transfer (uint val, uint none)
 *******/
 
 
-/****f* simple.c/count_packets
+/****f* dma_test.c/count_packets
 *
 * SUMMARY
 *  This function is used as a callback for packet received events.
@@ -473,30 +528,13 @@ void count_packets (uint key, uint payload)
     //if (payload==3) count++;
     if (spin1_schedule_callback (do_transfer, payload, 0, 1))
         count++;
-
-/*    //io_printf(IO_BUF, "Transfer %d\n", count++);
-    if (payload == 3)
-    {
-      count2++;
-      transfer_id = spin1_dma_transfer(DMA_WRITE, sysram_buffer, dtcm_buffer, DMA_WRITE,
-                         BUFFER_SIZE*sizeof(uint));
-      //io_printf(IO_BUF, "tid: %d A\n", transfer_id);
-    }
-    else if (payload == 5)
-    {
-      transfer_id = spin1_dma_transfer(DMA_WRITE, sdram_buffer, dtcm_buffer, DMA_WRITE,
-                         BUFFER_SIZE*sizeof(uint));
-      //io_printf(IO_BUF, "tid: %d B\n", transfer_id);
-    }
-*/
-
   }
 }
 /*
 *******/
 
 
-/****f* simple.c/check_memcopy
+/****f* dma_test.c/check_memcopy
 *
 * SUMMARY
 *  This function is used as a callback for dma done events.
@@ -591,52 +629,3 @@ void configure_crc_tables(void)
   dma[DMA_CRCT + 122] = 0xF7011641;
 }
 
-/****f* simple.c/c_main
-*
-* SUMMARY
-*  This function is called at application start-up.
-*  It is used to register event callbacks and begin the simulation.
-*
-* SYNOPSIS
-*  int c_main()
-*
-* SOURCE
-*/
-void c_main()
-{
-  // Get core and chip IDs
-
-  coreID = spin1_get_core_id ();
-  chipID = spin1_get_chip_id ();
-
-  // Setup CRC tables
-  configure_crc_tables();
-
-  io_printf (IO_BUF, ">> simple - chip (%d, %d) core %d\n",
-	     chipID >> 8, chipID & 255, coreID);
-
-  // set timer tick value (in microseconds)
-
-  spin1_set_timer_tick (TIMER_TICK_PERIOD);
-
-  // register callbacks
-
-  spin1_callback_on (MCPL_PACKET_RECEIVED, count_packets, -1);
-  //spin1_callback_on (DMA_TRANSFER_DONE, check_memcopy, 0);
-  spin1_callback_on (USER_EVENT, send_packets, 2);
-  spin1_callback_on (TIMER_TICK, flip_led, 3);
-
-  // initialize application
-
-  app_init ();
-
-  // go
-
-  spin1_start (SYNC_WAIT);
-
-  // report results
-
-  app_done ();
-}
-/*
-*******/

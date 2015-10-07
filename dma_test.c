@@ -25,7 +25,7 @@
 // SpiNNaker API
 
 #include "spin1_api.h"
-
+#include "spin1_api_params.h"
 // ------------------------------------------------------------------------
 // simulation constants
 // ------------------------------------------------------------------------
@@ -36,6 +36,9 @@
 
 #define BUFFER_SIZE        4000
 #define DMA_REPS           10000
+#define CRC_WRITE          1
+
+#define NODEBUG
 
 // ------------------------------------------------------------------------
 // variablesqueu
@@ -44,6 +47,7 @@
 uint coreID;
 uint chipID;
 uint test_DMA;
+uint dma_errors=0;
 
 uint packets = 0;
 uint pfailed = 0;
@@ -61,6 +65,10 @@ uint *sysram_buffer;
 uint *sdram_buffer;
 
 uint count = 0, count2 = 0, count_failed = 0;
+uint sdram_tmp;
+
+
+dma_queue_t dma_queue;
 
 /****f* simple.c/app_init
 *
@@ -161,10 +169,14 @@ void app_done ()
   // report number of packets
   io_printf (IO_BUF, "[core %d] received %d packets\n", coreID, packets);
 
+  // report number of DMA errors
+  io_printf (IO_BUF, "[core %d] failed %d DMA transfers\n", coreID, dma_errors);
+
+/*
   // report number of failed packets
   io_printf (IO_BUF, "[core %d] failed %d packets\n", coreID, pfailed);
 
-  // report number of failed user events*/
+  // report number of failed user events
   io_printf (IO_BUF, "[core %d] failed %d USER events\n", coreID, ufailed);
 
   // report number of DMA transfers
@@ -180,6 +192,7 @@ void app_done ()
     io_printf (IO_BUF, "\t%d : %d @ %d\n", dtcm_buffer[tfaddr],
                sdram_buffer[tfaddr], tfaddr);
   }
+*/
 
   // say goodbye
   io_printf (IO_BUF, "[core %d] stopping simulation\n", coreID);
@@ -341,17 +354,15 @@ void ftoa(float n, char *res, int precision)
 */
 void do_transfer (uint val, uint none)
 {
-  uint transfer_id;
+  uint transfer_id, crc_error;
   uint t1, t2;
   char tput_s[20], mb_s[20];
 
   if (val == 1)
   {
-    io_printf(IO_BUF, "\n1. Performing DMA Write (DTCM->SDRAM)\n");
-    //transfer_id = spin1_dma_transfer_crc(DMA_WRITE, sdram_buffer, dtcm_buffer, CRC_WRITE, DMA_WRITE, BUFFER_SIZE*sizeof(uint));
+    io_printf(IO_BUF, "\n- Performing DMA Write (DTCM->SDRAM)\n");
+    transfer_id = spin1_dma_transfer_crc(DMA_WRITE, sdram_buffer, dtcm_buffer, CRC_WRITE, DMA_WRITE, BUFFER_SIZE*sizeof(uint));
     
-    transfer_id = spin1_dma_transfer(DMA_WRITE, sdram_buffer, dtcm_buffer, DMA_WRITE, BUFFER_SIZE*sizeof(uint));
-
     // Wait for DMA operation to finish
     while((dma[DMA_STAT]&0x01));
 
@@ -359,33 +370,67 @@ void do_transfer (uint val, uint none)
     io_printf(IO_BUF, "CRCC:%08x CRCR:%08x CRC error:%d SDRAM: %08x %08x %08x %08x\n\n", dma[DMA_CRCC], dma[DMA_CRCR], dma[DMA_STAT & 0x0d] >> 13, sdram_buffer[0], sdram_buffer[1], sdram_buffer[99], sdram_buffer[BUFFER_SIZE]);
 */
 
-    io_printf(IO_BUF, "2. Corrupting SDRAM\n");
     
-    sdram_buffer[402] ^= sdram_buffer[402]; //0x0f0f0f0f;
-    //sdram_buffer[400] ^= 0xf0f0f0f0;
   }
   else if (val == 2)
   {
-    io_printf(IO_BUF, "3. Performing DMA Read (SDRAM->DTCM)\n");
+    io_printf(IO_BUF, "- Performing DMA Read (SDRAM->DTCM)\n");
     
     t1 = sv->clock_ms;
+    
     for(uint i=0; i<DMA_REPS; i++)
     {
-      //transfer_id = spin1_dma_transfer_crc(DMA_READ, sdram_buffer, dtcm_buffer, CRC_WRITE, DMA_READ, BUFFER_SIZE*sizeof(uint));
+      if(coreID==2 && i==5)
+      {
+        io_printf(IO_BUF, "- Corrupting SDRAM %d\n", i);
+        //sdram_buffer[402] ^= sdram_buffer[402]; //0x0f0f0f0f;
+        sdram_tmp = sdram_buffer[400];
+        sdram_buffer[400] = 0xf0f0f0f0;
+      }
+      else if (coreID==2 && i==8)
+      {
+        sdram_buffer[400] = sdram_tmp;
+      }
+      
+#ifdef DEBUG      
+      io_printf(IO_BUF, "i:%d DMA Status: 0x%08x\n", i, dma[DMA_STAT]);
+#endif
 
-      transfer_id = spin1_dma_transfer(DMA_READ, sdram_buffer, dtcm_buffer, DMA_READ, BUFFER_SIZE*sizeof(uint));
+      transfer_id = spin1_dma_transfer_crc(DMA_READ, sdram_buffer, dtcm_buffer, CRC_WRITE, DMA_READ, BUFFER_SIZE*sizeof(uint));
+
+#ifdef DEBUG
+      io_printf(IO_BUF, "i:%d tid:%d DMA Status: 0x%08x\n", i, transfer_id, dma[DMA_STAT]);
+#endif
 
       // Wait for DMA operation to finish
       while((dma[DMA_STAT]&0x01));
-    }
+#ifdef DEBUG
+      io_printf(IO_BUF, "i:%d DMA Status: 0x%08x\n", i, dma[DMA_STAT]);
+#endif
 
+      crc_error = (dma[DMA_STAT] >> 13)&0x01;
+
+      if (crc_error)  
+      {
+        dma_errors++;
+
+        // clear DMA errors and restart DMA controller
+        spin1_dma_clear_errors();
+        
+        io_printf(IO_BUF, "CRCC:%08x CRCR:%08x CRC error:%d\n", dma[DMA_CRCC], dma[DMA_CRCR], crc_error);
+        //io_printf(IO_BUF, "t2-t1:%d ms\n", t2-t1);
+#ifdef DEBUG
+        io_printf(IO_BUF, "DMA Status: 0x%08x\n", dma[DMA_STAT]);
+#endif
+      }
+
+    }
     t2 = sv->clock_ms;
-    io_printf(IO_BUF, "CRCC:%08x CRCR:%08x CRC error:%d\n\n", dma[DMA_CRCC], dma[DMA_CRCR], (dma[DMA_STAT] >> 13)&0x01);
-    //io_printf(IO_BUF, "t2-t1:%d ms\n", t2-t1);
     
-    ftoa(BUFFER_SIZE*4.0*DMA_REPS/(t2-t1)/1000.0, tput_s, 2);
-    ftoa(BUFFER_SIZE*4.0*DMA_REPS/1000000.0, mb_s, 2);
+    ftoa(BUFFER_SIZE*4.0*DMA_REPS/(t2-t1)/1e3, tput_s, 2);
+    ftoa(BUFFER_SIZE*4.0*DMA_REPS/1e6, mb_s, 2);
     io_printf(IO_BUF, "Throughput: %s MB/s (%s MB in %d ms) Transfers:%d\n\n", tput_s, mb_s, t2-t1, transfers);
+
 /*
     io_printf(IO_BUF, "CRCC:%08x CRCR:%08x CRC error:%d  DTCM: %08x %08x %08x %08x\n\n", dma[DMA_CRCC], dma[DMA_CRCR], dma[DMA_STAT & 0x0d] >> 13, dtcm_buffer[0], dtcm_buffer[1], dtcm_buffer[99], dtcm_buffer[BUFFER_SIZE]);
 */

@@ -15,7 +15,6 @@
 // SpiNNaker API
 
 #include "spin1_api.h"
-#include "spin1_api_params.h"
 // ------------------------------------------------------------------------
 // simulation constants
 // ------------------------------------------------------------------------
@@ -51,14 +50,15 @@ uint tfvals;
 uint ufailed = 0;
 
 uint *dtcm_buffer;
-uint *sysram_buffer;
 uint *sdram_buffer;
 
 uint count = 0, count2 = 0, count_failed = 0;
 uint sdram_tmp;
 
 
-dma_queue_t dma_queue;
+// ---------------------------------------------
+// Function prototypes
+// ---------------------------------------------
 
 void app_init ();
 void app_done ();
@@ -87,7 +87,6 @@ void configure_crc_tables(void);
 void c_main()
 {
   // Get core and chip IDs
-
   coreID = spin1_get_core_id ();
   chipID = spin1_get_chip_id ();
 
@@ -97,32 +96,25 @@ void c_main()
   io_printf (IO_BUF, ">> dma_test - chip (%d, %d) core %d\n",
 	     chipID >> 8, chipID & 255, coreID);
 
-  // set timer tick value (in microseconds)
-
+  // Set timer tick value (in microseconds)
   spin1_set_timer_tick (TIMER_TICK_PERIOD);
 
-  // register callbacks
+  // Register callbacks
 
   spin1_callback_on (MCPL_PACKET_RECEIVED, count_packets, -1);
   //spin1_callback_on (DMA_TRANSFER_DONE, check_memcopy, 0);
   spin1_callback_on (USER_EVENT, send_packets, 2);
   spin1_callback_on (TIMER_TICK, flip_led, 3);
 
-  // initialize application
-
+  // Initialize application
   app_init ();
 
-  // go
-
+  // Go
   spin1_start (SYNC_WAIT);
 
-  // report results
-
+  // Report results
   app_done ();
 }
-/*
-*******/
-
 
 
 /****f* dma_test.c/app_init
@@ -162,22 +154,13 @@ void app_init ()
   io_printf (IO_BUF, "[core %d] -----------------------\n", coreID);
   io_printf (IO_BUF, "[core %d] starting simulation\n", coreID);
 
-  // Allocate a buffer in System RAM
-
-  /*sysram_buffer = (uint *) sark_xalloc (sv->sysram_heap,
-					BUFFER_SIZE * sizeof(uint),
-					0,
-					ALLOC_LOCK);
-  */
-  // and a buffer somewhere in SDRAM
-
+  // Allocate a buffer in SDRAM
   sdram_buffer = (uint *) sark_xalloc (sv->sdram_heap,
 					(BUFFER_SIZE+1) * sizeof(uint),
 					0,
 					ALLOC_LOCK);
 
   // and a buffer in DTCM
-
   dtcm_buffer = (uint *) sark_alloc (BUFFER_SIZE+1, sizeof(uint));
 
   if (dtcm_buffer == NULL ||  sdram_buffer == NULL)
@@ -200,8 +183,6 @@ void app_init ()
     io_printf (IO_BUF, "[core %d] dtcm buffer @ 0x%08x sdram buffer @ 0x%08x\n", coreID, (uint) dtcm_buffer, (uint)sdram_buffer);
   }
 }
-/*
-*******/
 
 
 /****f* dma_test.c/app_done
@@ -253,8 +234,6 @@ void app_done ()
   io_printf (IO_BUF, "[core %d] stopping simulation\n", coreID);
   io_printf (IO_BUF, "[core %d] -------------------\n", coreID);
 }
-/*
-*******/
 
 
 /****f* dma_test.c/send_packets
@@ -281,8 +260,6 @@ void send_packets (uint ticks, uint none)
       pfailed++;
   }
 }
-/*
-*******/
 
 
 /****f* dma_test.c/flip_led
@@ -304,60 +281,55 @@ void flip_led (uint ticks, uint null)
 {
   // flip led 1
   // Only 1 core should flip leds!
-
   if (leadAp)
     spin1_led_control (LED_INV (1));
 
   // trigger user event to send packets
-
   if (spin1_trigger_user_event(ticks, NULL) == FAILURE)
     ufailed++;
 
   // stop if desired number of ticks reached
-
   if (ticks >= TOTAL_TICKS)
     spin1_exit (0);
 }
-/*
-*******/
+
 
 // reverses a string 's' of length 'len'
 void reverse(char *s, int len)
 {
-    int i=0, j=len-1;
-    char temp;
-    while (i<j)
-    {
-        temp = s[i];
-        s[i] = s[j];
-        s[j] = temp;
-        i++;
-        j--;
-    }
+  int i=0, j=len-1;
+  char temp;
+  while (i<j)
+  {
+    temp = s[i];
+    s[i] = s[j];
+    s[j] = temp;
+    i++;
+    j--;
+  }
 }
 
 // Converts a given integer num to string str[].  len is the number
- // of digits required in output. If len is more than the number
- // of digits in num, then 0s are added at the beginning.
+// of digits required in output. If len is more than the number
+// of digits in num, then 0s are added at the beginning.
 uint itoa(uint num, char s[], uint len)
 {
-    uint i = 0;
+  uint i = 0;
 
-    do {
-        s[i++] = '0' + num%10;
-        num /= 10;
-    } while (num>0);
+  do {
+    s[i++] = '0' + num%10;
+    num /= 10;
+  } while (num>0);
 
-    // If number of digits required is more, then
-    // add 0s at the beginning
-    while (i < len)
-      s[i++] = '0';
- 
-    reverse(s, i);
-    s[i] = '\0';
-    return i;
+  // If number of digits required is more, then
+  // add 0s at the beginning
+  while (i < len)
+    s[i++] = '0';
+
+  reverse(s, i);
+  s[i] = '\0';
+  return i;
 }
-
 
 
 // Converts a floating point number to string.
@@ -392,6 +364,7 @@ void ftoa(float n, char *res, int precision)
   }
 }
 
+
 /****f* dma_test.c/do_transfer
 *
 * SUMMARY
@@ -420,12 +393,6 @@ void do_transfer (uint val, uint none)
     
     // Wait for DMA operation to finish
     while((dma[DMA_STAT]&0x01));
-
-/*
-    io_printf(IO_BUF, "CRCC:%08x CRCR:%08x CRC error:%d SDRAM: %08x %08x %08x %08x\n\n", dma[DMA_CRCC], dma[DMA_CRCR], dma[DMA_STAT & 0x0d] >> 13, sdram_buffer[0], sdram_buffer[1], sdram_buffer[99], sdram_buffer[BUFFER_SIZE]);
-*/
-
-    
   }
   else if (val == 2)
   {
@@ -485,16 +452,8 @@ void do_transfer (uint val, uint none)
     ftoa(BUFFER_SIZE*4.0*DMA_REPS/(t2-t1)/1e3, tput_s, 2);
     ftoa(BUFFER_SIZE*4.0*DMA_REPS/1e6, mb_s, 2);
     io_printf(IO_BUF, "Throughput: %s MB/s (%s MB in %d ms) Transfers:%d\n\n", tput_s, mb_s, t2-t1, transfers);
-
-/*
-    io_printf(IO_BUF, "CRCC:%08x CRCR:%08x CRC error:%d  DTCM: %08x %08x %08x %08x\n\n", dma[DMA_CRCC], dma[DMA_CRCR], dma[DMA_STAT & 0x0d] >> 13, dtcm_buffer[0], dtcm_buffer[1], dtcm_buffer[99], dtcm_buffer[BUFFER_SIZE]);
-*/
-
-    //io_printf(IO_BUF, "tid: %d B\n", transfer_id);
   }
 }
-/*
-*******/
 
 
 /****f* dma_test.c/count_packets
@@ -519,8 +478,6 @@ void count_packets (uint key, uint payload)
   // count packets
   packets++;
 
-  //io_printf(IO_BUF, "Payload: %d\n", payload);
-
   // if testing DMA trigger transfer requests at the right time
   if (test_DMA)
   {
@@ -530,8 +487,6 @@ void count_packets (uint key, uint payload)
         count++;
   }
 }
-/*
-*******/
 
 
 /****f* dma_test.c/check_memcopy
@@ -589,8 +544,7 @@ void check_memcopy(uint tid, uint ttag)
     }
   }
 }
-/*
-*******/
+
 
 // Configure CRC table
 void configure_crc_tables(void)

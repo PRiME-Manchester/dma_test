@@ -25,7 +25,6 @@
 
 #define BUFFER_SIZE        4000
 #define DMA_REPS           10000
-#define CRC_WRITE          1
 
 #define NODEBUG
 
@@ -389,7 +388,7 @@ void do_transfer (uint val, uint none)
   if (val == 1)
   {
     io_printf(IO_BUF, "\n- Performing DMA Write (DTCM->SDRAM)\n");
-    transfer_id = spin1_dma_transfer_crc(DMA_WRITE, sdram_buffer, dtcm_buffer, CRC_WRITE, DMA_WRITE, BUFFER_SIZE*sizeof(uint));
+    transfer_id = spin1_dma_transfer_crc(DMA_WRITE, sdram_buffer, dtcm_buffer, DMA_WRITE, BUFFER_SIZE*sizeof(uint));
     
     // Wait for DMA operation to finish
     while((dma[DMA_STAT]&0x01));
@@ -418,7 +417,7 @@ void do_transfer (uint val, uint none)
       io_printf(IO_BUF, "i:%d DMA Status: 0x%08x\n", i, dma[DMA_STAT]);
 #endif
 
-      transfer_id = spin1_dma_transfer_crc(DMA_READ, sdram_buffer, dtcm_buffer, CRC_WRITE, DMA_READ, BUFFER_SIZE*sizeof(uint));
+      transfer_id = spin1_dma_transfer_crc(DMA_READ, sdram_buffer, dtcm_buffer, DMA_READ, BUFFER_SIZE*sizeof(uint));
 
 #ifdef DEBUG
       io_printf(IO_BUF, "i:%d tid:%d DMA Status: 0x%08x\n", i, transfer_id, dma[DMA_STAT]);

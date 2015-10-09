@@ -1,0 +1,5 @@
+app_load dma_test2.aplx all 1-3 16
+app_sig all 16 sync0
+sleep 4
+iobuf 1
+

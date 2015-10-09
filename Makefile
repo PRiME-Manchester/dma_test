@@ -23,7 +23,7 @@
 
 # Name of app (derived from C source - eg sark.c)
 
-APP := dma_test
+APP := dma_test2
 
 # Configuration options
 

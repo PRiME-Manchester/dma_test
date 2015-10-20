@@ -20,14 +20,18 @@
 // ------------------------------------------------------------------------
 
 #define TIMER_TICK_PERIOD  10000
-#define TOTAL_TICKS        400
+#define TOTAL_TICKS        500
 #define ITER_TIMES         1
 
+// Block size in words (4 bytes each)
 #define BLOCK_SIZE         4000
 #define DMA_REPS           10000
 
 #define CORES_USED         3
-#define SDRAM_SIZE         112000000000
+// SDRAM_SIZE in bytes
+#define SDRAM_SIZE         112000000
+// Buffer size in words (4 bytes each)
+#define BUFFER_SIZE        SDRAM_SIZE/CORES_USED/4
 
 #define NODEBUG
 
@@ -63,7 +67,7 @@ void reverse(char *s, int len);
 uint itoa(uint num, char s[], uint len);
 void ftoa(float n, char *res, int precision);
 void configure_crc_tables(void);
-void SDRAM_Write(uint none1, uint none2);
+uint SDRAM_Write(uint none1, uint none2);
 void SDRAM_Read(uint tid, uint ttag);
 
 /****** dma_test.c/c_main
@@ -93,11 +97,21 @@ void c_main()
   spin1_set_timer_tick (TIMER_TICK_PERIOD);
 
   // Register callbacks
-  spin1_callback_on (DMA_TRANSFER_DONE, SDRAM_Read, 0);
+  //spin1_callback_on (DMA_TRANSFER_DONE, SDRAM_Read, 0);
   spin1_callback_on (TIMER_TICK, count_ticks, 2);
 
-  // Schedule 1st DMA write
-  spin1_schedule_callback(SDRAM_Write, 0, 0, 1);
+  // Schedule 1st DMA write (and fill BUFFER_SIZE)
+	uint err, fail=0;
+	for (uint step=0; step<BUFFER_SIZE; step+=BLOCK_SIZE+1)
+	{
+		do {
+			err = spin1_schedule_callback(SDRAM_Write, step, 0, 1);
+		} while(err==0);
+
+		if (!err) fail++;
+		//if (!err) io_printf(IO_BUF, "Transfer fail!\n");
+	}
+	io_printf(IO_BUF, "Failed transfers: %d\n", fail);
 
   // Initialize application
   app_init ();
@@ -134,7 +148,7 @@ void app_init ()
 
   // Allocate a buffer in SDRAM
   sdram_buffer = (uint *) sark_xalloc (sv->sdram_heap,
-					(SDRAM_SIZE/CORES_USED) * sizeof(uint),
+					BUFFER_SIZE * sizeof(uint),
 					0,
 					ALLOC_LOCK);
 
@@ -154,7 +168,7 @@ void app_init ()
       dtcm_buffer[i]   = BLOCK_SIZE-i;
 
     // initialize SDRAM
-    for (uint i=0; i < SDRAM_SIZE/CORES_USED; i++)
+    for (uint i=0; i < BUFFER_SIZE; i++)
       sdram_buffer[i]  = 0;
 
     io_printf (IO_BUF, "[core %d] dtcm buffer @ 0x%08x sdram buffer @ 0x%08x\n", coreID, (uint) dtcm_buffer, (uint)sdram_buffer);
@@ -196,6 +210,10 @@ void app_done ()
   // end
   io_printf (IO_BUF, "[core %d] stopping simulation\n", coreID);
   io_printf (IO_BUF, "[core %d] -------------------\n", coreID);
+
+  // Free sdram and dtcm memory
+  sark_xfree(sv->sdram_heap, sdram_buffer, ALLOC_LOCK);
+  sark_free(dtcm_buffer);
 }
 
 
@@ -321,15 +339,29 @@ void ftoa(float n, char *res, int precision)
 }
 
 
-void SDRAM_Write(uint none1, uint none2)
+uint SDRAM_Write(uint step, uint none2)
 {
-	uint transfer_id;
+	uint transfer_id, k, fail=0;
 
-	transfer_id = spin1_dma_transfer_crc(DMA_WRITE,
-						sdram_buffer,
+	// for (uint k=0; k<BUFFER_SIZE; k+=BLOCK_SIZE+1)
+	// {
+	// 	do {
+			transfer_id = spin1_dma_transfer_crc(DMA_WRITE,
+						sdram_buffer + k,
 						dtcm_buffer,
 						DMA_WRITE,
-						BUFFER_SIZE*sizeof(uint));
+						BLOCK_SIZE*sizeof(uint));
+		// } while(!transfer_id==0);
+
+		// Wait for DMA operation to finish
+    //while((dma[DMA_STAT]&0x01));
+
+	// 	if (transfer_id==0)
+	// 		fail++;
+			
+	// }
+	// io_printf(IO_BUF, "Failed transfers = %d\n", fail);
+			return transfer_id;
 }
 
 void SDRAM_Read(uint tid, uint ttag)
@@ -347,12 +379,12 @@ void SDRAM_Read(uint tid, uint ttag)
     sdram_tmp = sdram_buffer[400];
     sdram_buffer[400] = 0xf0f0f0f0;
   }
-
+	
 	transfer_id = spin1_dma_transfer_crc(DMA_READ,
 						sdram_buffer,
 						dtcm_buffer,
 						DMA_READ,
-						BUFFER_SIZE*sizeof(uint));
+						(BLOCK_SIZE+1)*sizeof(uint));
 
 	read_count++;
 }

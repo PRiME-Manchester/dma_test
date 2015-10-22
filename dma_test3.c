@@ -20,20 +20,19 @@
 // ------------------------------------------------------------------------
 
 #define TIMER_TICK_PERIOD  10000
-#define TOTAL_TICKS        500
-#define ITER_TIMES         1
+#define TOTAL_TICKS        10
 
 // Block size in words (4 bytes each)
-#define BLOCK_SIZE         4000
-#define DMA_REPS           10000
+#define BLOCK_SIZE         5
+#define DMA_REPS           4
 
-#define CORES_USED         3
-// SDRAM_SIZE in bytes
-#define SDRAM_SIZE         112000000
-// Buffer size in words (4 bytes each)
-#define BUFFER_SIZE        SDRAM_SIZE/CORES_USED/4
+// SDRAM_SIZE in words (4 bytes each)
+//#define SDRAM_SIZE         28000000
+#define SDRAM_SIZE         36
 
-#define NODEBUG
+#define DEBUG
+#define CORRUPT
+#define ERR_ID 						 19
 
 // ------------------------------------------------------------------------
 // variables
@@ -42,12 +41,14 @@
 uint coreID;
 uint chipID;
 uint test_DMA;
-uint dma_errors=0;
-uint read_count=0;
-uint err_count=1;
-
-uint transfers = 0;
-uint ufailed = 0;
+uint dma_errors   = 0;
+uint read_count   = 0;
+uint err_count    = 1;
+uint lastDMAwrite = 0;
+uint DMA_blockread_step = 0;
+uint transfers    = 0;
+uint ufailed      = 0;
+uint DMAtransfers = 0;
 
 uint *dtcm_buffer;
 uint *sdram_buffer;
@@ -67,7 +68,8 @@ void reverse(char *s, int len);
 uint itoa(uint num, char s[], uint len);
 void ftoa(float n, char *res, int precision);
 void configure_crc_tables(void);
-uint SDRAM_Write(uint none1, uint none2);
+void reinitialise_DTCM(void);
+void SDRAM_Write(uint none1, uint none2);
 void SDRAM_Read(uint tid, uint ttag);
 
 /****** dma_test.c/c_main
@@ -97,21 +99,11 @@ void c_main()
   spin1_set_timer_tick (TIMER_TICK_PERIOD);
 
   // Register callbacks
-  //spin1_callback_on (DMA_TRANSFER_DONE, SDRAM_Read, 0);
-  spin1_callback_on (TIMER_TICK, count_ticks, 2);
+  spin1_callback_on (DMA_TRANSFER_DONE, SDRAM_Read, 1);
+  spin1_callback_on (TIMER_TICK, count_ticks, 0);
 
-  // Schedule 1st DMA write (and fill BUFFER_SIZE)
-	uint err, fail=0;
-	for (uint step=0; step<BUFFER_SIZE; step+=BLOCK_SIZE+1)
-	{
-		do {
-			err = spin1_schedule_callback(SDRAM_Write, step, 0, 1);
-		} while(err==0);
-
-		if (!err) fail++;
-		//if (!err) io_printf(IO_BUF, "Transfer fail!\n");
-	}
-	io_printf(IO_BUF, "Failed transfers: %d\n", fail);
+  // Schedule 1st DMA write (and fill SDRAM_SIZE)
+	spin1_schedule_callback(SDRAM_Write, 0, 0, 2);
 
   // Initialize application
   app_init ();
@@ -148,7 +140,7 @@ void app_init ()
 
   // Allocate a buffer in SDRAM
   sdram_buffer = (uint *) sark_xalloc (sv->sdram_heap,
-					BUFFER_SIZE * sizeof(uint),
+					SDRAM_SIZE * sizeof(uint),
 					0,
 					ALLOC_LOCK);
 
@@ -165,10 +157,10 @@ void app_init ()
     test_DMA = TRUE;
     // initialize DTCM
     for (uint i = 0; i < BLOCK_SIZE+1; i++)
-      dtcm_buffer[i]   = BLOCK_SIZE-i;
+      dtcm_buffer[i]   = 0x5f5f5f5f;
 
     // initialize SDRAM
-    for (uint i=0; i < BUFFER_SIZE; i++)
+    for (uint i=0; i < SDRAM_SIZE; i++)
       sdram_buffer[i]  = 0;
 
     io_printf (IO_BUF, "[core %d] dtcm buffer @ 0x%08x sdram buffer @ 0x%08x\n", coreID, (uint) dtcm_buffer, (uint)sdram_buffer);
@@ -199,10 +191,14 @@ void app_done ()
   io_printf (IO_BUF, "[core %d] read count: %d\n", coreID, read_count);
 
   // report bandwidth
-  ftoa(BUFFER_SIZE*4.0*DMA_REPS/(t2-t1)/1e3, tput_s, 2);
-  ftoa(BUFFER_SIZE*4.0*DMA_REPS/1e6, mb_s, 2);
-  io_printf(IO_BUF, "Throughput: %s MB/s (%s MB in %d ms)\n\n", tput_s, mb_s, t2-t1);
-
+  if((t2-t1)>0)
+  {
+	  ftoa(SDRAM_SIZE*4.0*DMA_REPS/(t2-t1)/1e3, tput_s, 2);
+	  ftoa(SDRAM_SIZE*4.0*DMA_REPS/1e6, mb_s, 2);
+	  io_printf(IO_BUF, "[core %d] Throughput: %s MB/s (%s MB in %d ms)\n", coreID, tput_s, mb_s, t2-t1);
+	}
+	else
+		io_printf(IO_BUF, "[core %d] Not enough data to compute throughput.\n", coreID);
 
   // report number of DMA errors
   io_printf (IO_BUF, "[core %d] failed %d DMA transfers\n", coreID, dma_errors);
@@ -234,39 +230,174 @@ void app_done ()
 */
 void count_ticks (uint ticks, uint null)
 {
-	uint transfer_id;
-
 	// check for DMA errors
   if ((dma[DMA_STAT] >> 13)&0x01)  
   {
-    dma_errors++;
-
     // clear DMA errors and restart DMA controller
     spin1_dma_clear_errors();
     
-    io_printf(IO_BUF, "Err:%d CRCC:%08x CRCR:%08x\n", err_count, dma[DMA_CRCC], dma[DMA_CRCR]);
-
-    if (err_count==3)
+#ifdef CORRUPT
+    if (dma_errors==2)
 	 	{	
 	 		io_printf(IO_BUF, "- Clearing SDRAM error\n");
-	    sdram_buffer[400] = sdram_tmp;
+	    sdram_buffer[ERR_ID] = sdram_tmp;
 	  }
- 		
+#endif
+
     // Restart DMA reads
-  	transfer_id = spin1_dma_transfer_crc(DMA_READ,
+    spin1_dma_transfer_crc(DMA_READ,
 					sdram_buffer,
 					dtcm_buffer,
 					DMA_READ,
-					BUFFER_SIZE*sizeof(uint));
+					BLOCK_SIZE*sizeof(uint));
 
-  	err_count++;
+  	dma_errors++;
   }
-
-  // stop if desired number of ticks reached
-  if (ticks >= TOTAL_TICKS)
-    spin1_exit (0);
 }
 
+
+void reinitialise_DTCM(void)
+{
+  // initialize DTCM
+  for (uint i = 0; i < BLOCK_SIZE+1; i++)
+    dtcm_buffer[i]   = 0x5f5f5f5f;
+}
+
+void SDRAM_Write(uint none1, uint none2)
+{
+	uint i=1;
+
+	lastDMAwrite = 0;
+
+	for (uint k=0; k<=SDRAM_SIZE-(BLOCK_SIZE+1); k+=BLOCK_SIZE+1)
+	{
+		// Notes that DMA queue full doesn't mean that not all the required
+		// transfers were completed. It's just telling you that they queue
+		// was full a certain amount of times because of the repeated polling
+		while(!spin1_dma_transfer_crc(DMA_WRITE,
+					sdram_buffer + k,
+					dtcm_buffer,
+					DMA_WRITE,
+					BLOCK_SIZE*sizeof(uint)) );
+
+		// spin1_dma_transfer_crc(DMA_WRITE,
+		// 			sdram_buffer + k,
+		// 			dtcm_buffer,
+		// 			DMA_WRITE,
+		// 			BLOCK_SIZE*sizeof(uint));
+
+		// Wait for DMA operation to finish
+    //while((dma[DMA_STAT]&0x01));	
+	}
+	lastDMAwrite = 1;
+
+#ifdef DEBUG
+	io_printf(IO_BUF, "Buffersize: %d Blocksize: %d Rem: %d\n", SDRAM_SIZE, BLOCK_SIZE, SDRAM_SIZE-(BLOCK_SIZE+1));
+	for(uint k=0; k<=SDRAM_SIZE-(BLOCK_SIZE+1); k+=BLOCK_SIZE+1)
+	{
+		io_printf(IO_BUF, "%2d: ", i++);
+		for(uint i=0; i<BLOCK_SIZE+1; i++)
+			io_printf(IO_BUF, "%x ", sdram_buffer[i + k]);
+		io_printf(IO_BUF, "\n");
+	}
+	io_printf(IO_BUF, "\n");
+#endif
+}
+
+
+void SDRAM_Read(uint tid, uint ttag)
+{
+	uint transfer_id;
+
+	if (read_count==0)
+		t1 = sv->clock_ms;
+
+	//if (lastDMAwrite)
+	if(DMAtransfers >= SDRAM_SIZE/(BLOCK_SIZE+1)-1)
+	{
+		transfer_id = spin1_dma_transfer_crc(DMA_READ,
+										sdram_buffer + DMA_blockread_step,
+										dtcm_buffer,
+										DMA_READ,
+										BLOCK_SIZE*sizeof(uint));
+
+#ifdef DEBUG
+  	io_printf(IO_BUF, "%d(%d): ", tid, transfer_id);
+		for(uint k=0; k<BLOCK_SIZE; k++)
+		{
+			io_printf(IO_BUF, "%x ", dtcm_buffer[k]);
+			dtcm_buffer[k] = 0;
+		}
+		
+		io_printf(IO_BUF, "DMAerr:%d CRCC:%08x CRCR:%08x ", (dma[DMA_STAT] >> 13)&0x01, dma[DMA_CRCC], dma[DMA_CRCR]);
+		io_printf(IO_BUF, "\n");
+#endif DEBUG
+
+		DMA_blockread_step += BLOCK_SIZE+1;
+		if (DMA_blockread_step>SDRAM_SIZE-(BLOCK_SIZE+1))
+		{
+			DMA_blockread_step = 0;
+			read_count++;
+			io_printf(IO_BUF, "\n");
+
+#ifdef CORRUPT
+			if (coreID==1 && read_count==1)
+			{
+			  io_printf(IO_BUF, "- Corrupting SDRAM\n");
+		    sdram_tmp = sdram_buffer[ERR_ID];
+		    sdram_buffer[ERR_ID] = 0xf0f0f0f0;
+		  }
+#endif
+
+		}
+
+		//io_printf(IO_BUF, "read count %d\n", read_count);
+  	if (read_count==DMA_REPS)
+		{	
+			t2 = sv->clock_ms;
+			spin1_exit(0);
+		}
+	}
+
+	DMAtransfers++;
+}
+
+// Configure CRC table
+void configure_crc_tables(void)
+{
+  dma[DMA_CRCT +   0] = 0xFB808B20;
+  dma[DMA_CRCT +   4] = 0x7DC04590;
+  dma[DMA_CRCT +   8] = 0xBEE022C8;
+  dma[DMA_CRCT +  12] = 0x5F701164;
+  dma[DMA_CRCT +  16] = 0x2FB808B2;
+  dma[DMA_CRCT +  20] = 0x97DC0459;
+  dma[DMA_CRCT +  24] = 0xB06E890C;
+  dma[DMA_CRCT +  28] = 0x58374486;
+  dma[DMA_CRCT +  32] = 0xAC1BA243;
+  dma[DMA_CRCT +  36] = 0xAD8D5A01;
+  dma[DMA_CRCT +  40] = 0xAD462620;
+  dma[DMA_CRCT +  44] = 0x56A31310;
+  dma[DMA_CRCT +  48] = 0x2B518988;
+  dma[DMA_CRCT +  52] = 0x95A8C4C4;
+  dma[DMA_CRCT +  56] = 0xCAD46262;
+  dma[DMA_CRCT +  60] = 0x656A3131;
+  dma[DMA_CRCT +  64] = 0x493593B8;
+  dma[DMA_CRCT +  68] = 0x249AC9DC;
+  dma[DMA_CRCT +  72] = 0x924D64EE;
+  dma[DMA_CRCT +  76] = 0xC926B277;
+  dma[DMA_CRCT +  80] = 0x9F13D21B;
+  dma[DMA_CRCT +  84] = 0xB409622D;
+  dma[DMA_CRCT +  86] = 0x21843A36;
+  dma[DMA_CRCT +  90] = 0x90C21D1B;
+  dma[DMA_CRCT +  94] = 0x33E185AD;
+  dma[DMA_CRCT +  98] = 0x627049F6;
+  dma[DMA_CRCT + 102] = 0x313824FB;
+  dma[DMA_CRCT + 106] = 0xE31C995D;
+  dma[DMA_CRCT + 110] = 0x8A0EC78E;
+  dma[DMA_CRCT + 114] = 0xC50763C7;
+  dma[DMA_CRCT + 118] = 0x19033AC3;
+  dma[DMA_CRCT + 122] = 0xF7011641;
+}
 
 // reverses a string 's' of length 'len'
 void reverse(char *s, int len)
@@ -337,92 +468,3 @@ void ftoa(float n, char *res, int precision)
     itoa((int)fpart, res+i+1, precision);
   }
 }
-
-
-uint SDRAM_Write(uint step, uint none2)
-{
-	uint transfer_id, k, fail=0;
-
-	// for (uint k=0; k<BUFFER_SIZE; k+=BLOCK_SIZE+1)
-	// {
-	// 	do {
-			transfer_id = spin1_dma_transfer_crc(DMA_WRITE,
-						sdram_buffer + k,
-						dtcm_buffer,
-						DMA_WRITE,
-						BLOCK_SIZE*sizeof(uint));
-		// } while(!transfer_id==0);
-
-		// Wait for DMA operation to finish
-    //while((dma[DMA_STAT]&0x01));
-
-	// 	if (transfer_id==0)
-	// 		fail++;
-			
-	// }
-	// io_printf(IO_BUF, "Failed transfers = %d\n", fail);
-			return transfer_id;
-}
-
-void SDRAM_Read(uint tid, uint ttag)
-{
-	uint transfer_id;
-
-	if (read_count==0)
-		t1 = sv->clock_ms;
-	else if (read_count==DMA_REPS)
-		t2 = sv->clock_ms;	
-
-	if (coreID==2 && read_count==2)
-	{
-	  io_printf(IO_BUF, "- Corrupting SDRAM\n");
-    sdram_tmp = sdram_buffer[400];
-    sdram_buffer[400] = 0xf0f0f0f0;
-  }
-	
-	transfer_id = spin1_dma_transfer_crc(DMA_READ,
-						sdram_buffer,
-						dtcm_buffer,
-						DMA_READ,
-						(BLOCK_SIZE+1)*sizeof(uint));
-
-	read_count++;
-}
-
-// Configure CRC table
-void configure_crc_tables(void)
-{
-  dma[DMA_CRCT +   0] = 0xFB808B20;
-  dma[DMA_CRCT +   4] = 0x7DC04590;
-  dma[DMA_CRCT +   8] = 0xBEE022C8;
-  dma[DMA_CRCT +  12] = 0x5F701164;
-  dma[DMA_CRCT +  16] = 0x2FB808B2;
-  dma[DMA_CRCT +  20] = 0x97DC0459;
-  dma[DMA_CRCT +  24] = 0xB06E890C;
-  dma[DMA_CRCT +  28] = 0x58374486;
-  dma[DMA_CRCT +  32] = 0xAC1BA243;
-  dma[DMA_CRCT +  36] = 0xAD8D5A01;
-  dma[DMA_CRCT +  40] = 0xAD462620;
-  dma[DMA_CRCT +  44] = 0x56A31310;
-  dma[DMA_CRCT +  48] = 0x2B518988;
-  dma[DMA_CRCT +  52] = 0x95A8C4C4;
-  dma[DMA_CRCT +  56] = 0xCAD46262;
-  dma[DMA_CRCT +  60] = 0x656A3131;
-  dma[DMA_CRCT +  64] = 0x493593B8;
-  dma[DMA_CRCT +  68] = 0x249AC9DC;
-  dma[DMA_CRCT +  72] = 0x924D64EE;
-  dma[DMA_CRCT +  76] = 0xC926B277;
-  dma[DMA_CRCT +  80] = 0x9F13D21B;
-  dma[DMA_CRCT +  84] = 0xB409622D;
-  dma[DMA_CRCT +  86] = 0x21843A36;
-  dma[DMA_CRCT +  90] = 0x90C21D1B;
-  dma[DMA_CRCT +  94] = 0x33E185AD;
-  dma[DMA_CRCT +  98] = 0x627049F6;
-  dma[DMA_CRCT + 102] = 0x313824FB;
-  dma[DMA_CRCT + 106] = 0xE31C995D;
-  dma[DMA_CRCT + 110] = 0x8A0EC78E;
-  dma[DMA_CRCT + 114] = 0xC50763C7;
-  dma[DMA_CRCT + 118] = 0x19033AC3;
-  dma[DMA_CRCT + 122] = 0xF7011641;
-}
-

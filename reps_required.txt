@@ -1,0 +1,13 @@
+1000 Reps = 461.093 s => 112,000MB in 461 s 
+
+24 hrs = 24*60*60 = 86400 s
+
+1000*86400 / 461.093 = 187,380 Reps
+
+Information to store on error (per chip)
+1. Time of error
+2. Block number
+3. Total errors
+
+At end of simulation host probes all the spinnaker chips in turn.
+

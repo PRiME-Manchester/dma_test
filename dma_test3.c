@@ -28,7 +28,7 @@
 
 // SDRAM_SIZE in words (4 bytes each)
 //#define SDRAM_SIZE         28000000
-#define SDRAM_SIZE         40
+#define SDRAM_SIZE         30
 #define SDRAM_VALUE        0x5f5f5f5f
 #define ERR_VALUE          0x0f0f0f0f
 
@@ -372,6 +372,16 @@ void dma_transfer(uint tid, uint ttag)
 	    // Reinitialize DTCM
 	    initialize_DTCM();
 
+      // Rewrite SDRAM block
+      do {
+				transferid = spin1_dma_transfer_crc(DMA_WRITE,
+						sdram_buffer + DMA_blockread_step,
+						dtcm_buffer_w,
+						DMA_WRITE,
+						BLOCK_SIZE*sizeof(uint));
+			} while (!transferid);
+
+      spinn_state = Read;
 			break;
 
 		case Exit:

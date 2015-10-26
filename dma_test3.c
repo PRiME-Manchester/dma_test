@@ -27,7 +27,8 @@
 #define DMA_REPS           10
 
 // MEM_SIZE in words (4 bytes each)
-#define MEM_SIZE           28000000
+//#define MEM_SIZE           28000000
+#define MEM_SIZE           4000
 //#define MEM_SIZE           30
 #define MEM_VALUE          0x5f5f5f5f
 #define ERR_VALUE          0x0f0f0f0f
@@ -38,7 +39,7 @@
 #define NODEBUG_CORRUPT
 
 // Determines whether SDRAM blocks are intentionally corrupted
-#define NOCORRUPT
+#define CORRUPT
 
 // CORRUPT_ID corresponds to the number of DMA transfers done when error is introduced
 #define CORRUPT_TID        6
@@ -47,7 +48,7 @@
 #define ERR_ID2            1600
 
 // ------------------------
-// Enumerations
+// Type definitions
 // ------------------------
 typedef enum state
 {
@@ -56,6 +57,12 @@ typedef enum state
 	Rewrite,
 	Exit
 } state;
+
+typedef struct 
+{
+  uint t;
+  uint block_id;
+} error_type;
 
 // ------------------------
 // Variables
@@ -81,6 +88,7 @@ uint t1,t2;
 
 state spinn_state_next = Write;
 state spinn_state      = Write;
+error_type errors[50];
 
 // ------------------------
 // Function prototypes
@@ -224,6 +232,11 @@ void app_done ()
   // report number of DMA errors
   io_printf (IO_BUF, "[core %d] Failed %d DMA transfers\n", coreID, dma_errors);
 
+  for(uint i=0; i<dma_errors; i++)
+  {
+    io_printf(IO_BUF, "[core %d] Error %d time:%d ms block_id:%d\n", coreID, i+1, errors[i].t, errors[i].block_id);
+  }
+
   // end
   io_printf (IO_BUF, "[core %d] Stopping simulation\n", coreID);
   io_printf (IO_BUF, "[core %d] -----------------------\n", coreID);
@@ -257,6 +270,9 @@ void count_ticks(uint ticks, uint null)
 	// check for DMA errors
   if ((dma[DMA_STAT] >> 13)&0x01)  
   {
+    errors[dma_errors].t = spin1_get_simulation_time();
+    errors[dma_errors].block_id = DMA_blockread_step - (BLOCK_SIZE+1);
+
     dma_errors++;
 
  		// Print DTCM contents
@@ -289,7 +305,9 @@ void dma_transfer(uint tid, uint ttag)
 	switch(spinn_state_next)
 	{
 		
+    // -----------------------------------------------------
 		// Fill up SDRAM (initialization phase)
+    // -----------------------------------------------------
 		case Write:
 			do {
 				transferid = spin1_dma_transfer_crc(DMA_WRITE,
@@ -319,9 +337,11 @@ void dma_transfer(uint tid, uint ttag)
 			}
 			break;
 
+    // -----------------------------------------------------
 		// Read from SDRAM
 		// In case a CRC error is encountered, the error is trapped during the next
 		// timer tick
+    // -----------------------------------------------------
 		case Read:
 			if (read_count==0)
 				t1 = sv->clock_ms;
@@ -389,7 +409,9 @@ void dma_transfer(uint tid, uint ttag)
 			DMAtransfers++;
 			break;
 
-		// Rewrite corrupted SDRAM block
+		// -----------------------------------------------------
+    // Rewrite corrupted SDRAM block
+    // -----------------------------------------------------
 		case Rewrite:
 
 #ifdef DEBUG_CORRUPT
@@ -414,6 +436,9 @@ void dma_transfer(uint tid, uint ttag)
       spinn_state_next = Read;
 			break;
 
+    // -----------------------------------------------------
+    // Exit
+    // -----------------------------------------------------
 		case Exit:
 			//Printout last DMA read
 			#ifdef DEBUG_READ

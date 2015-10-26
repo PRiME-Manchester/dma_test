@@ -15,6 +15,8 @@
 // SpiNNaker API
 
 #include "spin1_api.h"
+#include <string.h>
+
 // ------------------------------------------------------------------------
 // simulation constants
 // ------------------------------------------------------------------------
@@ -101,7 +103,7 @@ state_t spinn_state      = Write;
 error_t errors[50];
 
 // Artifically introduced faults
-uint faults[NUM_FAULTS]={432*3427, 520*6000, 604*8534, 834*17540, 934*25000};
+uint faults[NUM_FAULTS]={432*3000, 520*6000, 604*8000, 834*17000, 934*25000};
 
 // ------------------------
 // Function prototypes
@@ -117,6 +119,7 @@ void configure_crc_tables(void);
 void initialize_DTCM(void);
 void dma_transfer(uint tid, uint ttag);
 void print_block(void);
+void process_sdp(uint m, uint port);
 
 /****** dma_test.c/c_main
 *
@@ -131,6 +134,8 @@ void print_block(void);
 */
 void c_main()
 {
+  io_printf (IO_STD, ">> sdping\n");
+
   // Get core and chip IDs
   coreID = spin1_get_core_id ();
   chipID = spin1_get_chip_id ();
@@ -151,6 +156,9 @@ void c_main()
   // Schedule 1st DMA write (and fill MEM_SIZE)
 	spin1_schedule_callback(dma_transfer, 0, 0, 1);
 
+	// Register callback for when an SDP packet is received
+	spin1_callback_on (SDP_PACKET_RX, process_sdp, 2);
+  
   // Initialize application
   app_init ();
 
@@ -207,7 +215,7 @@ void app_init ()
     for (uint i=0; i < MEM_SIZE; i++)
       sdram_buffer[i]  = 0;
 
-    io_printf (IO_BUF, "[core %d] DTCM buffer (R) @0x%08x DTCM buffer (W) @0x%08x SDRAM buffer @0x%08x\n", coreID, (uint)dtcm_buffer_r, (uint)dtcm_buffer_w, (uint)sdram_buffer);
+    io_printf (IO_BUF, "[core %d] DTCM buffer (R) @0x%08x DTCM buffer (W) @0x%08x sdram buffer @0x%08x\n", coreID, (uint)dtcm_buffer_r, (uint)dtcm_buffer_w, (uint)sdram_buffer);
   }
 }
 
@@ -457,12 +465,45 @@ void dma_transfer(uint tid, uint ttag)
         io_printf(IO_BUF, "[core %d] 100%% T:%d s\n", coreID,	(int)(spin1_get_simulation_time()*TIMER_TICK_PERIOD/1e6));
 #endif
 
-			spin1_exit(0);
+			//spin1_exit(0);
 			break;
 	}
 
 }
 
+// Send SDP packet to host (when pinged by host)
+void process_sdp(uint m, uint port)
+{
+  // sdp_msg_t my_msg;
+  // char s[100];
+  // uint s_len;
+
+  // // Initialize SDP
+  // my_msg.tag       = 1;             // IPTag 1
+  // my_msg.dest_port = PORT_ETH;      // Ethernet
+  // my_msg.dest_addr = sv->dbg_addr;  // Root chip
+
+  // my_msg.flags     = 0x07;          // Flags = 7
+  // my_msg.srce_port = spin1_get_core_id ();  // Source port
+  // my_msg.srce_addr = spin1_get_chip_id ();  // Source addr
+
+  sdp_msg_t *msg = (sdp_msg_t *) m;
+	io_printf (IO_BUF, "SDP len %d, port %d - %s\n", msg->length, port, msg->data);
+  io_printf (IO_STD, "SDP len %d, port %d - %s\n", msg->length, port, msg->data);
+
+	// // Compose message  
+ //  strcpy(s, "This is a test");
+
+ //  spin1_memcpy(my_msg.data, (void *)s, s_len);
+ //  my_msg.length = sizeof(sdp_hdr_t) + sizeof(cmd_hdr_t) + s_len;
+
+ //  // Send SDP message
+ //  (void)spin1_send_sdp_msg(&my_msg, 100); // 100ms timeout
+
+  // Exit only if program executed till the end
+  // if (spinn_state_next==Exit)
+  // 	spin1_exit(0);
+}
 
 void initialize_DTCM(void)
 {

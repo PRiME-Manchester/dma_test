@@ -24,28 +24,23 @@
 
 // Block size in words (4 bytes each)
 #define BLOCK_SIZE         1000
-#define DMA_REPS           10
+#define DMA_REPS           100
 
 // MEM_SIZE in words (4 bytes each)
-//#define MEM_SIZE           28000000
-#define MEM_SIZE           4000
-//#define MEM_SIZE           30
+// This is equivalent to   112,112,000 bytes if BLOCK_SIZE=1000
+#define MEM_SIZE           (BLOCK_SIZE+1)*28000
 #define MEM_VALUE          0x5f5f5f5f
 #define ERR_VALUE          0x0f0f0f0f
+#define NUM_FAULTS         5
 
 // Controls which part of the program generates verbose messages for debugging purposes
 #define NODEBUG_WRITE
 #define NODEBUG_READ
 #define NODEBUG_CORRUPT
+#define SHOW_PROGRESS
 
 // Determines whether SDRAM blocks are intentionally corrupted
 #define CORRUPT
-
-// CORRUPT_ID corresponds to the number of DMA transfers done when error is introduced
-#define CORRUPT_TID        6
-// This corresponds to the sdram index that's corraupted
-#define ERR_ID1 					 1500
-#define ERR_ID2            1600
 
 // ------------------------
 // Type definitions
@@ -56,39 +51,57 @@ typedef enum state
 	Write,
 	Rewrite,
 	Exit
-} state;
+} state_t;
 
 typedef struct 
 {
-  uint t;
+  uint ticks;
   uint block_id;
-} error_type;
+} error_t;
 
 // ------------------------
 // Variables
 // ------------------------
 
+// chip and core IDs
 uint coreID;
 uint chipID;
-uint test_DMA;
-uint dma_errors   = 0;
-uint read_count   = 0;
-uint err_count    = 1;
-uint DMA_blockread_step = 0;
-uint read_step    = 0;
-uint transfers    = 0;
-uint ufailed      = 0;
-uint DMAtransfers = 0;
 
+// DMA error counter
+uint error_k  = 0;
+
+// keeps track of the number of times ALL of the SDRAM has been read
+uint rep_count    = 0;
+
+// 'pointer' that keeps track of DMA block to read
+uint block_step = 0;
+
+// 'pointer' that keeps track of the previous DMA block before it's updated
+// necessary for handling error conditions
+uint block_step_pre = 0;
+
+// number of DMA transfers performed
+uint transfers_k = 0;
+
+// separate DTCM buffers for reading and writing (easier to test memory contents while debugging)
 uint *dtcm_buffer_r;
 uint *dtcm_buffer_w;
+// SDRAM buffer
 uint *sdram_buffer;
 
+// used to store timing information when starting and stopping the transfers
+// to calculate the throughput
 uint t1,t2;
 
-state spinn_state_next = Write;
-state spinn_state      = Write;
-error_type errors[50];
+// enumeration which keep track of the current and next state
+state_t spinn_state_next = Write;
+state_t spinn_state      = Write;
+
+// structure that keeps time and block information when errors are registered (on read)
+error_t errors[50];
+
+// Artifically introduced faults
+uint faults[NUM_FAULTS]={432*3427, 520*6000, 604*8534, 834*17540, 934*25000};
 
 // ------------------------
 // Function prototypes
@@ -103,6 +116,7 @@ void ftoa(float n, char *res, int precision);
 void configure_crc_tables(void);
 void initialize_DTCM(void);
 void dma_transfer(uint tid, uint ttag);
+void print_block(void);
 
 /****** dma_test.c/c_main
 *
@@ -182,12 +196,10 @@ void app_init ()
 
   if (dtcm_buffer_w == NULL || dtcm_buffer_r == NULL || sdram_buffer == NULL)
   {
-    test_DMA = FALSE;
     io_printf (IO_BUF, "[core %d] Error - cannot allocate buffer\n", coreID);
   }
   else
   {
-    test_DMA = TRUE;
     // initialize DTCM
     initialize_DTCM();
 
@@ -195,7 +207,7 @@ void app_init ()
     for (uint i=0; i < MEM_SIZE; i++)
       sdram_buffer[i]  = 0;
 
-    io_printf (IO_BUF, "[core %d] DTCM buffer @ 0x%08x sdram buffer @ 0x%08x\n", coreID, (uint)dtcm_buffer_r, (uint)dtcm_buffer_w, (uint)sdram_buffer);
+    io_printf (IO_BUF, "[core %d] DTCM buffer (R) @0x%08x DTCM buffer (W) @0x%08x SDRAM buffer @0x%08x\n", coreID, (uint)dtcm_buffer_r, (uint)dtcm_buffer_w, (uint)sdram_buffer);
   }
 }
 
@@ -213,28 +225,31 @@ void app_init ()
 */
 void app_done ()
 {
-	char tput_s[20], mb_s[20];
+	char tput_s[20], mb_s[20], time_s[20];
 
   // report simulation time
-  io_printf (IO_BUF, "[core %d] simulation lasted %d ticks\n", coreID,
-             spin1_get_simulation_time());
+  io_printf (IO_BUF, "[core %d] Simulation lasted %d (%d ms) ticks\n", coreID,
+             spin1_get_simulation_time(), TIMER_TICK_PERIOD/1000);
 
   // report bandwidth
   if((t2-t1)>0)
   {
 	  ftoa(MEM_SIZE*4.0*DMA_REPS/(t2-t1)/1e3, tput_s, 2);
 	  ftoa(MEM_SIZE*4.0*DMA_REPS/1e6, mb_s, 2);
-	  io_printf(IO_BUF, "[core %d] Throughput: %s MB/s (%s MB in %d ms)\n", coreID, tput_s, mb_s, t2-t1);
+	  ftoa((t2-t1)/1000.0, time_s, 1);
+	  io_printf(IO_BUF, "[core %d] Throughput: %s MB/s (%s MB in %s s)\n", coreID, tput_s, mb_s, time_s);
 	}
 	else
 		io_printf(IO_BUF, "[core %d] Not enough data to compute throughput.\n", coreID);
 
   // report number of DMA errors
-  io_printf (IO_BUF, "[core %d] Failed %d DMA transfers\n", coreID, dma_errors);
+  io_printf (IO_BUF, "[core %d] Failed %d DMA transfers\n", coreID, error_k);
 
-  for(uint i=0; i<dma_errors; i++)
+  // report information about the errors (time and block_id)
+  for(uint i=0; i<error_k; i++)
   {
-    io_printf(IO_BUF, "[core %d] Error %d time:%d ms block_id:%d\n", coreID, i+1, errors[i].t, errors[i].block_id);
+    ftoa(errors[i].ticks*TIMER_TICK_PERIOD/1e6, time_s, 2);
+    io_printf(IO_BUF, "[core %d] Err:%d T:%s s block_id:%d\n", coreID, i+1, time_s, errors[i].block_id);
   }
 
   // end
@@ -265,28 +280,18 @@ void app_done ()
 */
 void count_ticks(uint ticks, uint null)
 {
-	uint transferid, k=0;
-
 	// check for DMA errors
   if ((dma[DMA_STAT] >> 13)&0x01)  
   {
-    errors[dma_errors].t = spin1_get_simulation_time();
-    errors[dma_errors].block_id = DMA_blockread_step - (BLOCK_SIZE+1);
-
-    dma_errors++;
+    errors[error_k].ticks = spin1_get_simulation_time();
+    errors[error_k].block_id = block_step_pre;
+    error_k++;
 
  		// Print DTCM contents
     // At this point no DMA_transfer_done even is generated,
     // that's why the printf has to be executed here.
 #ifdef DEBUG_CORRUPT
-		io_printf(IO_BUF, "\n* (R) %d: ", read_step);
-		for(uint k=0; k<BLOCK_SIZE; k++)
-		{
-			io_printf(IO_BUF, "%x ", dtcm_buffer_r[k]);
-			dtcm_buffer_r[k] = 0;
-		}
-		io_printf(IO_BUF, "DMAerr:%d CRCC:%08x CRCR:%08x ", (dma[DMA_STAT] >> 13)&0x01, dma[DMA_CRCC], dma[DMA_CRCR]);
-		io_printf(IO_BUF, "\n");
+		print_block();
 #endif
 
     // clear DMA errors and restart DMA controller
@@ -311,15 +316,15 @@ void dma_transfer(uint tid, uint ttag)
 		case Write:
 			do {
 				transferid = spin1_dma_transfer_crc(DMA_WRITE,
-						sdram_buffer + DMA_blockread_step,
+						sdram_buffer + block_step,
 						dtcm_buffer_w,
 						DMA_WRITE,
 						BLOCK_SIZE*sizeof(uint));
 			} while (!transferid);
 			
-			DMA_blockread_step += BLOCK_SIZE+1;
+			block_step += BLOCK_SIZE+1;
 
-			DMAtransfers++;
+			transfers_k++;
 
 #ifdef DEBUG_WRITE
 			io_printf(IO_BUF, "(W) tid:%d\n", transferid);
@@ -329,11 +334,11 @@ void dma_transfer(uint tid, uint ttag)
       spinn_state      = Write;
       spinn_state_next = Write;
 
-			if (DMAtransfers==MEM_SIZE/(BLOCK_SIZE+1))
+			if (transfers_k==MEM_SIZE/(BLOCK_SIZE+1))
 			{
 				spinn_state_next = Read;
-				DMAtransfers = 0;
-				DMA_blockread_step = 0;
+				transfers_k = 0;
+				block_step = 0;
 			}
 			break;
 
@@ -343,90 +348,92 @@ void dma_transfer(uint tid, uint ttag)
 		// timer tick
     // -----------------------------------------------------
 		case Read:
-			if (read_count==0)
+			// Start timer
+			if (transfers_k==0)
 				t1 = sv->clock_ms;
-
+				
 			// Start the DMA reads after all the writes are done
-#ifdef CORRUPT
-			if (DMAtransfers == CORRUPT_TID)
-			{
-  #ifdef DEBUG_CORRUPT
-			  io_printf(IO_BUF, "- Corrupting SDRAM location [%d] and [%d]\n", ERR_ID1, ERR_ID2);
-  #endif
-		    sdram_buffer[ERR_ID1] = ERR_VALUE;
-        sdram_buffer[ERR_ID2] = ERR_VALUE;        
-		  }
-#endif
-
 #ifdef DEBUG_READ
 			if (spinn_state==Read)
 			{
-        if (DMA_blockread_step==(BLOCK_SIZE+1))
-					io_printf(IO_BUF, "\nRepetition %d\n", read_count+1);
+        if (block_step==(BLOCK_SIZE+1))
+					io_printf(IO_BUF, "\nRepetition %d\n", rep_count+1);
 
-        io_printf(IO_BUF, "(R) %d: ", read_step);
-			
-        for(uint k=0; k<BLOCK_SIZE; k++)
-				{
-					io_printf(IO_BUF, "%x ", dtcm_buffer_r[k]);
-					dtcm_buffer_r[k] = 0;
-				}
-				
-				io_printf(IO_BUF, "DMAerr:%d CRCC:%08x CRCR:%08x ", (dma[DMA_STAT] >> 13)&0x01, dma[DMA_CRCC], dma[DMA_CRCR]);
-				io_printf(IO_BUF, "\n");
+				print_block();			
 			}
 #endif
 
-      //io_printf(IO_BUF, "step:%d\n", DMA_blockread_step);
+// Introduce errors right after the SDRAM is filled up
+#ifdef CORRUPT
+			if (transfers_k==0)
+			{
+			  io_printf(IO_BUF, "[core %d] Corrupting SDRAM locations ", coreID);
+			  for (uint i=0; i<NUM_FAULTS; i++)
+		    {
+		    	io_printf(IO_BUF, "[%d]", faults[i]);
+		    	if (i<NUM_FAULTS-1)
+		    		io_printf(IO_BUF, ", ");
+		    	else
+		    		io_printf(IO_BUF, ".\n");
+		    	sdram_buffer[faults[i]] = ERR_VALUE;
+		    }
+		  }
+#endif
+
 			transferid = spin1_dma_transfer_crc(DMA_READ,
-					sdram_buffer + DMA_blockread_step,
+					sdram_buffer + block_step,
 					dtcm_buffer_r,
 					DMA_READ,
 					BLOCK_SIZE*sizeof(uint));
 
-      read_step = DMA_blockread_step;
-			DMA_blockread_step += BLOCK_SIZE+1;
+      block_step_pre = block_step;
+			block_step += BLOCK_SIZE+1;
 
-			if (DMA_blockread_step>MEM_SIZE-(BLOCK_SIZE+1))
+			if (block_step>MEM_SIZE-(BLOCK_SIZE+1))
 			{
-				DMA_blockread_step = 0;
-				read_count++;
+				block_step = 0;
+				rep_count++;
 			}
 
       // Update state
       spinn_state      = Read;
       spinn_state_next = Read;
 
- 			if (DMAtransfers%(MEM_SIZE/BLOCK_SIZE*DMA_REPS*10/100)==0)
-        io_printf(IO_BUF, "%d%%\n", 10+100*DMAtransfers/(MEM_SIZE/BLOCK_SIZE*DMA_REPS));
+#ifdef SHOW_PROGRESS
+ 			if (transfers_k%(MEM_SIZE/BLOCK_SIZE*DMA_REPS*10/100)==0)
+ 			{
+        io_printf(IO_BUF, "[core %d] %3d%% T:%d s\n", coreID,
+        											100*transfers_k/(MEM_SIZE/BLOCK_SIZE*DMA_REPS),
+        											(int)(spin1_get_simulation_time()*TIMER_TICK_PERIOD/1e6));
+ 			}
+#endif
 
-	  	if (read_count==DMA_REPS)
+	  	if (rep_count==DMA_REPS)
 			{	
 				t2 = sv->clock_ms;
 				spinn_state_next = Exit;
 			}
 
-			DMAtransfers++;
+			transfers_k++;
 			break;
 
 		// -----------------------------------------------------
     // Rewrite corrupted SDRAM block
     // -----------------------------------------------------
 		case Rewrite:
-
-#ifdef DEBUG_CORRUPT
-			io_printf(IO_BUF, "* Rewriting corrupted SDRAM block\n");
-#endif
-
-	    // Reinitialize DTCM
+      // Reinitialize DTCM
 	    initialize_DTCM();
 
-      // Move pointer back one BLOCK_SIZE+1 to correct the error
-      DMA_blockread_step -= BLOCK_SIZE+1;
+	    // Adjust rep_count counter if the error is in the last block
+	    if (block_step==0)
+	    	rep_count--;
+
+      // Move pointer back to previous block_step_pre
+      block_step = block_step_pre;
       // Rewrite SDRAM block
       do {
 				transferid = spin1_dma_transfer_crc(DMA_WRITE,
-						sdram_buffer + DMA_blockread_step,
+						sdram_buffer + block_step,
 						dtcm_buffer_w,
 						DMA_WRITE,
 						BLOCK_SIZE*sizeof(uint));
@@ -441,17 +448,14 @@ void dma_transfer(uint tid, uint ttag)
     // -----------------------------------------------------
 		case Exit:
 			//Printout last DMA read
-			#ifdef DEBUG_READ
-				io_printf(IO_BUF, "(R) %d: ", read_step);
-				for(uint k=0; k<BLOCK_SIZE; k++)
-				{
-					io_printf(IO_BUF, "%x ", dtcm_buffer_r[k]);
-					dtcm_buffer_r[k] = 0;
-				}
-				
-				io_printf(IO_BUF, "DMAerr:%d CRCC:%08x CRCR:%08x ", (dma[DMA_STAT] >> 13)&0x01, dma[DMA_CRCC], dma[DMA_CRCR]);
-				io_printf(IO_BUF, "\n\n");
-			#endif
+#ifdef DEBUG_READ
+				print_block();
+				io_printf(IO_BUF, "\n");
+#endif
+
+#ifdef SHOW_PROGRESS
+        io_printf(IO_BUF, "[core %d] 100%% T:%d s\n", coreID,	(int)(spin1_get_simulation_time()*TIMER_TICK_PERIOD/1e6));
+#endif
 
 			spin1_exit(0);
 			break;
@@ -470,6 +474,27 @@ void initialize_DTCM(void)
   }
 }
 
+// Print out block values
+void print_block(void)
+{
+	if (spinn_state==Read || spinn_state==Exit)
+  {
+  	//io_printf(IO_BUF, "(R) %2d %2d %2d %2d: ", block_step_pre, block_step, rep_count, transfers_k);
+  	io_printf(IO_BUF, "(R) %2d: ", block_step_pre);
+  }
+
+	for(uint k=0; k<BLOCK_SIZE; k++)
+	{
+		if (dtcm_buffer_r[k]==MEM_VALUE)
+			io_printf(IO_BUF, "-");
+		else
+			io_printf(IO_BUF, "*");
+		//io_printf(IO_BUF, "%x ", dtcm_buffer_r[k]);
+		dtcm_buffer_r[k] = 0;
+	}
+	//io_printf(IO_BUF, " DMAerr:%d CRCC:%08x CRCR:%08x\n", (dma[DMA_STAT] >> 13)&0x01, dma[DMA_CRCC], dma[DMA_CRCR]);
+	io_printf(IO_BUF, " DMAerr:%d\n", (dma[DMA_STAT] >> 13)&0x01);
+}
 
 // Configure CRC table using 32-bit Ethernet CRC
 void configure_crc_tables(void)

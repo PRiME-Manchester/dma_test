@@ -182,7 +182,7 @@ $(APP).elf: $(OBJECTS) $(SCRIPT) $(LIBRARY)
 
 $(APP).o: $(APP).c $(INC_DIR)/spinnaker.h $(INC_DIR)/sark.h \
 	  $(INC_DIR)/spin1_api.h
-	$(CC) $(CFLAGS) $(APP).c
+	$(CC) -Wall $(CFLAGS) $(APP).c
 
 
 # Tidy and cleaning dependencies

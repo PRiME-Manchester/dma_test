@@ -109,9 +109,9 @@ uint faults[NUM_FAULTS]={432*3000, 520*6000, 604*8000, 834*17000, 934*25000};
 // Function prototypes
 // ------------------------
 
-void app_init ();
-void app_done ();
-void count_ticks (uint ticks, uint null);
+void app_init();
+void app_done();
+void count_ticks(uint ticks, uint null);
 void reverse(char *s, int len);
 uint itoa(uint num, char s[], uint len);
 void ftoa(float n, char *res, int precision);
@@ -120,6 +120,7 @@ void initialize_DTCM(void);
 void dma_transfer(uint tid, uint ttag);
 void print_block(void);
 void process_sdp(uint m, uint port);
+void swap_sdp_hdr (sdp_msg_t *msg);
 
 /****** dma_test.c/c_main
 *
@@ -134,11 +135,9 @@ void process_sdp(uint m, uint port);
 */
 void c_main()
 {
-  io_printf (IO_STD, ">> sdping\n");
-
   // Get core and chip IDs
-  coreID = spin1_get_core_id ();
-  chipID = spin1_get_chip_id ();
+  coreID = spin1_get_core_id();
+  chipID = spin1_get_chip_id();
 
   // Setup CRC tables
   configure_crc_tables();
@@ -147,26 +146,26 @@ void c_main()
 	     chipID >> 8, chipID & 255, coreID);
 
   // Set timer tick value (in microseconds)
-  spin1_set_timer_tick (TIMER_TICK_PERIOD);
+  spin1_set_timer_tick(TIMER_TICK_PERIOD);
 
   // Register callbacks
-  spin1_callback_on (DMA_TRANSFER_DONE, dma_transfer, 1);
-  spin1_callback_on (TIMER_TICK, count_ticks, 0);
+  spin1_callback_on(DMA_TRANSFER_DONE, dma_transfer, 1);
+  spin1_callback_on(TIMER_TICK, count_ticks, 0);
 
   // Schedule 1st DMA write (and fill MEM_SIZE)
 	spin1_schedule_callback(dma_transfer, 0, 0, 1);
 
 	// Register callback for when an SDP packet is received
-	spin1_callback_on (SDP_PACKET_RX, process_sdp, 2);
+	spin1_callback_on(SDP_PACKET_RX, process_sdp, 2);
   
   // Initialize application
-  app_init ();
+  app_init();
 
   // Go
-  spin1_start (SYNC_WAIT);
+  spin1_start(SYNC_WAIT);
 
   // Report results
-  app_done ();
+  app_done();
 }
 
 
@@ -227,11 +226,11 @@ void app_init ()
 *  It's used to report some statistics and say goodbye.
 *
 * SYNOPSIS
-*  void app_done ()
+*  void app_done()
 *
 * SOURCE
 */
-void app_done ()
+void app_done()
 {
 	char tput_s[20], mb_s[20], time_s[20];
 
@@ -474,35 +473,51 @@ void dma_transfer(uint tid, uint ttag)
 // Send SDP packet to host (when pinged by host)
 void process_sdp(uint m, uint port)
 {
-  // sdp_msg_t my_msg;
-  // char s[100];
-  // uint s_len;
-
-  // // Initialize SDP
-  // my_msg.tag       = 1;             // IPTag 1
-  // my_msg.dest_port = PORT_ETH;      // Ethernet
-  // my_msg.dest_addr = sv->dbg_addr;  // Root chip
-
-  // my_msg.flags     = 0x07;          // Flags = 7
-  // my_msg.srce_port = spin1_get_core_id ();  // Source port
-  // my_msg.srce_addr = spin1_get_chip_id ();  // Source addr
-
   sdp_msg_t *msg = (sdp_msg_t *) m;
-	io_printf (IO_BUF, "SDP len %d, port %d - %s\n", msg->length, port, msg->data);
-  io_printf (IO_STD, "SDP len %d, port %d - %s\n", msg->length, port, msg->data);
+  int s_len;
+  char s[100], s_tmp[20], time_s[20];
+  
+  swap_sdp_hdr(msg);
 
-	// // Compose message  
- //  strcpy(s, "This is a test");
+  // report number of DMA errors
+  if (spinn_state_next!=Exit)
+  	io_printf(s, "*Running* %d,%d,%d,", chipID>>8, chipID&255, error_k);
+  else
+  	io_printf(s, "%d,%d,%d,", chipID>>8, chipID&255, error_k);
 
- //  spin1_memcpy(my_msg.data, (void *)s, s_len);
- //  my_msg.length = sizeof(sdp_hdr_t) + sizeof(cmd_hdr_t) + s_len;
+  // report information about the errors (time and block_id)
+  for(uint i=0; i<error_k; i++)
+  {
+    ftoa(errors[i].ticks*TIMER_TICK_PERIOD/1e6, time_s, 2);
+    io_printf(s_tmp, "%s,%d,", time_s, errors[i].block_id);
+    strcat(s, s_tmp);
+  }
+  //delete last comma
+  s[strlen(s)-1] = '\0';
 
- //  // Send SDP message
- //  (void)spin1_send_sdp_msg(&my_msg, 100); // 100ms timeout
+  s_len = strlen(s);
+  spin1_memcpy(msg->data, (void *)s, s_len);
+
+  msg->length = sizeof(sdp_hdr_t) + sizeof(cmd_hdr_t) + s_len;
+	(void) spin1_send_sdp_msg (msg, 10);
+
+	spin1_msg_free (msg);
 
   // Exit only if program executed till the end
-  // if (spinn_state_next==Exit)
-  // 	spin1_exit(0);
+  if (spinn_state_next==Exit)
+  	spin1_exit(0);
+}
+
+void swap_sdp_hdr (sdp_msg_t *msg)
+{
+  uint dest_port = msg->dest_port;
+  uint dest_addr = msg->dest_addr;
+
+  msg->dest_port = msg->srce_port;
+  msg->srce_port = dest_port;
+
+  msg->dest_addr = msg->srce_addr;
+  msg->srce_addr = dest_addr;
 }
 
 void initialize_DTCM(void)

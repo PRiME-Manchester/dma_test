@@ -17,8 +17,8 @@ use warnings;
 
 use SpiNN::SCP;
 
-
-my $debug = 4;		# Debug level (3 or 4)
+my $sleep = 0.2;
+my $debug = 1;		# Debug level (3 or 4)
 
 my $spin;		# SpiNNaker handle
 my $port;		# SpiNNaker app. port
@@ -55,22 +55,26 @@ sub process_args
 
 sub main
 {
-  process_args ();
+  process_args();
 
-  my $data = "0123456789abcdef" . chr(0);
   my $pad = pack "V4", 0, 0, 0, 0;
 
-	$spin->send_sdp($pad . $data, port => $port, reply => ($port == 1),
-			 debug => $debug);
+	$spin->send_sdp($pad, port => $port, reply => ($port == 1), debug => $debug);
 
-	print "\n";
+	if ($debug>=3) {
+		print "\n";
+	}
 
 	my $rc = $spin->recv_sdp (timeout => 0.1, debug => $debug);
-
-	print "# No reply\n" unless $rc;
-	print "\n";
+	if ($rc)
+	{
+		print "$spin->{sdp_data}\n";
+	}
+	else
+	{
+		print "# No reply\n";
+	}
 }
-
 
 main ();
 

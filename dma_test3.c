@@ -24,16 +24,27 @@
 // 10ms timer tick
 #define TIMER_TICK_PERIOD  10000
 
+
+//  100 reps =  46.70s,  47.22s,  46.18s,  48.72s 1 rep = 0.4872s
+// 1000 reps = 462.91s, 468.14s, 457.64s, 482.97s 1 rep = 0.4830s
+// 10000 reps = 
+#define DMA_REPS           10000
+// approx. 8hrs
+//#define DMA_REPS           70000
+
 // Block size in words (4 bytes each)
 #define BLOCK_SIZE         1000
-#define DMA_REPS           100
 
 // MEM_SIZE in words (4 bytes each)
 // This is equivalent to   112,112,000 bytes if BLOCK_SIZE=1000
-#define MEM_SIZE           (BLOCK_SIZE+1)*28000
+#define MEM_SIZE           ((BLOCK_SIZE+1)*28000)
 #define MEM_VALUE          0x5f5f5f5f
 #define ERR_VALUE          0x0f0f0f0f
 #define NUM_FAULTS         5
+
+// Precompute some constants
+#define TRANSFERS_T        (MEM_SIZE/BLOCK_SIZE*DMA_REPS)
+#define TIMER_CONV         (1000000/TIMER_TICK_PERIOD)
 
 // Controls which part of the program generates verbose messages for debugging purposes
 #define NODEBUG_WRITE
@@ -83,7 +94,7 @@ uint block_step = 0;
 uint block_step_pre = 0;
 
 // number of DMA transfers performed
-uint transfers_k = 0;
+long long transfers_k = 0;
 
 // separate DTCM buffers for reading and writing (easier to test memory contents while debugging)
 uint *dtcm_buffer_r;
@@ -104,6 +115,9 @@ error_t errors[50];
 
 // Artifically introduced faults
 uint faults[NUM_FAULTS]={432*3000, 520*6000, 604*8000, 834*17000, 934*25000};
+
+// Simulation ending time
+char time_end_s[20];
 
 // ------------------------
 // Function prototypes
@@ -164,8 +178,6 @@ void c_main()
   // Go
   spin1_start(SYNC_WAIT);
 
-  // Report results
-  app_done();
 }
 
 
@@ -255,8 +267,8 @@ void app_done()
   // report information about the errors (time and block_id)
   for(uint i=0; i<error_k; i++)
   {
-    ftoa(errors[i].ticks*TIMER_TICK_PERIOD/1e6, time_s, 2);
-    io_printf(IO_BUF, "[core %d] Err:%d T:%s s block_id:%d\n", coreID, i+1, time_s, errors[i].block_id);
+    ftoa(1.0*errors[i].ticks/TIMER_CONV, time_s, 2);
+    io_printf(IO_BUF, "[core %d] Err:%d T: %ss block_id:%d\n", coreID, i+1, time_s, errors[i].block_id);
   }
 
   // end
@@ -287,11 +299,17 @@ void app_done()
 */
 void count_ticks(uint ticks, uint null)
 {
-	// check for DMA errors
+	char time_s[20];
+
+  // check for DMA errors
   if ((dma[DMA_STAT] >> 13)&0x01)  
   {
     errors[error_k].ticks = spin1_get_simulation_time();
     errors[error_k].block_id = block_step_pre;
+
+    ftoa(1.0*errors[error_k].ticks/TIMER_CONV, time_s, 2);
+    io_printf(IO_BUF, "[core %d] Err:%d T: %ss block_id:%d\n", coreID, error_k+1, time_s, errors[error_k].block_id);
+    
     error_k++;
 
  		// Print DTCM contents
@@ -407,11 +425,11 @@ void dma_transfer(uint tid, uint ttag)
       spinn_state_next = Read;
 
 #ifdef SHOW_PROGRESS
- 			if (transfers_k%(MEM_SIZE/BLOCK_SIZE*DMA_REPS*10/100)==0)
+ 			if (transfers_k%(TRANSFERS_T/10)==0)
  			{
-        io_printf(IO_BUF, "[core %d] %3d%% T:%d s\n", coreID,
-        											100*transfers_k/(MEM_SIZE/BLOCK_SIZE*DMA_REPS),
-        											(int)(spin1_get_simulation_time()*TIMER_TICK_PERIOD/1e6));
+        io_printf(IO_BUF, "[core %d] %3d%% T: %ds\n", coreID,
+        											(int)(100*transfers_k/TRANSFERS_T),
+        											(int)(spin1_get_simulation_time()/TIMER_CONV) );
  			}
 #endif
 
@@ -461,10 +479,15 @@ void dma_transfer(uint tid, uint ttag)
 #endif
 
 #ifdef SHOW_PROGRESS
-        io_printf(IO_BUF, "[core %d] 100%% T:%d s\n", coreID,	(int)(spin1_get_simulation_time()*TIMER_TICK_PERIOD/1e6));
+				ftoa(1.0*spin1_get_simulation_time()/TIMER_CONV, time_end_s, 0);
+        io_printf(IO_BUF, "[core %d] 100%% T: %ss\n", coreID, time_end_s);
 #endif
 
-			//spin1_exit(0);
+      // Report results
+      // Do no exit, because otherwise if 1 core hasn't yet finished
+      // it's operation and the others have, when pinging from the host
+      // you won't get the information of the already finished cores
+			app_done();
 			break;
 	}
 
@@ -481,14 +504,15 @@ void process_sdp(uint m, uint port)
 
   // report number of DMA errors
   if (spinn_state_next!=Exit)
-  	io_printf(s, "*Running* %d,%d,%d,", chipID>>8, chipID&255, error_k);
+  	io_printf(s, "*Running %d%%* %d,%d,%d,", (int)(100*transfers_k/TRANSFERS_T),
+  										chipID>>8, chipID&255, error_k);
   else
-  	io_printf(s, "%d,%d,%d,", chipID>>8, chipID&255, error_k);
+  	io_printf(s, "*Done T: %ss* %d,%d,%d,", time_end_s, chipID>>8, chipID&255, error_k);
 
   // report information about the errors (time and block_id)
   for(uint i=0; i<error_k; i++)
   {
-    ftoa(errors[i].ticks*TIMER_TICK_PERIOD/1e6, time_s, 2);
+    ftoa(1.0*errors[i].ticks/TIMER_CONV, time_s, 2);
     io_printf(s_tmp, "%s,%d,", time_s, errors[i].block_id);
     strcat(s, s_tmp);
   }
@@ -503,9 +527,6 @@ void process_sdp(uint m, uint port)
 
 	spin1_msg_free (msg);
 
-  // Exit only if program executed till the end
-  if (spinn_state_next==Exit)
-  	spin1_exit(0);
 }
 
 void swap_sdp_hdr (sdp_msg_t *msg)

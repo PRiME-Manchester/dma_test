@@ -39,13 +39,13 @@
 
 // MEM_SIZE in words (4 bytes each)
 // This is equivalent to   112,112,000 bytes if BLOCK_SIZE=1000
-#define MEM_SIZE           ((BLOCK_SIZE+1)*28000)
+#define MEM_SIZE           (long long)((BLOCK_SIZE+1)*28000)
 #define MEM_VALUE          0x5f5f5f5f
 #define ERR_VALUE          0x0f0f0f0f
 #define NUM_FAULTS         5
 
 // Precompute some constants
-#define TRANSFERS_T        (MEM_SIZE/BLOCK_SIZE*DMA_REPS)
+#define TRANSFERS_T        (long long)(MEM_SIZE/BLOCK_SIZE*DMA_REPS)
 #define TIMER_CONV         (1000000/TIMER_TICK_PERIOD)
 
 // Controls which part of the program generates verbose messages for debugging purposes
@@ -427,10 +427,10 @@ void dma_transfer(uint tid, uint ttag)
       spinn_state_next = Read;
 
 #ifdef SHOW_PROGRESS
- 			if (transfers_k%(TRANSFERS_T/10)==0)
+ 			if (transfers_k%(TRANSFERS_T/100)==0)
  			{
         io_printf(IO_BUF, "[core %d] %3d%% T: %ds\n", coreID,
-        											(int)(100*transfers_k/TRANSFERS_T),
+        											(int)(100.0*transfers_k/TRANSFERS_T),
         											(int)(spin1_get_simulation_time()/TIMER_CONV) );
  			}
 #endif
@@ -506,7 +506,7 @@ void process_sdp(uint m, uint port)
 
   // report number of DMA errors
   if (spinn_state_next!=Exit)
-  	io_printf(s, "*Running %d%%* %d,%d,%d,", (int)(100*transfers_k/TRANSFERS_T),
+  	io_printf(s, "*Running %d%%* %d,%d,%d,", (int)(100.0*transfers_k/TRANSFERS_T),
   										chipID>>8, chipID&255, error_k);
   else
   	io_printf(s, "*Done T: %ss* %d,%d,%d,", time_end_s, chipID>>8, chipID&255, error_k);

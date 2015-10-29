@@ -24,13 +24,15 @@
 // 10ms timer tick
 #define TIMER_TICK_PERIOD  10000
 
-
-//  100 reps =  46.70s,  47.22s,  46.18s,  48.72s 1 rep = 0.4872s
-// 1000 reps = 462.91s, 468.14s, 457.64s, 482.97s 1 rep = 0.4830s
-// 10000 reps = 
-#define DMA_REPS           10000
-// approx. 8hrs
-//#define DMA_REPS           70000
+//  1 rep = 0.437s (average)
+#define HOURS_24					200000
+//#define DMA_REPS            8000 // 1 hr
+//#define DMA_REPS           65000 // 8 hrs
+//#define DMA_REPS					HOURS_24     // 24 hrs
+#define	DMA_REPS					(HOURS_24*2) // 48 hrs
+//#define	DMA_REPS					(HOURS_24*3) // 72 hrs
+//#define	DMA_REPS					(HOURS_24*4) // 96 hrs
+//#define	DMA_REPS					(HOURS_24_5) // 120 hrs
 
 // Block size in words (4 bytes each)
 #define BLOCK_SIZE         1000
@@ -53,7 +55,7 @@
 #define SHOW_PROGRESS
 
 // Determines whether SDRAM blocks are intentionally corrupted
-#define CORRUPT
+#define NOCORRUPT
 
 // ------------------------
 // Type definitions

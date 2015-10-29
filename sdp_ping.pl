@@ -83,7 +83,7 @@ sub main
 
   if ($board_type==5) {
     if ($num_boards==1) {
-      print "This will probe chips that don't exist because machine is not square/rectangular.\n";
+      print "* \"No Replies\" will be reported due to a non-rectangular structure.\n";
       probe_chips(8,8);
     }
     elsif ($num_boards==3) {
@@ -93,7 +93,7 @@ sub main
       probe_chips(24,12);
     }
     elsif ($num_boards==12) {
-      die "Not yet implemented\n";
+      die "Not yet implemented!\n";
     }
     elsif ($num_boards==24) {
       probe_chips(48,24);
@@ -101,10 +101,16 @@ sub main
     elsif ($num_boards==120) {
       probe_chips(96,60);
     }
+    else {
+      die "This board size is not possible! Choose between 1, 3, 6, 12, 24, and 120 boards.\n";
+    }
   }
   elsif ($board_type==3) # ignore board size
   {
     probe_chips(2,2);
+  }
+  else {
+    die "Board type can only be 3 or 5.\n";
   }
 
 }

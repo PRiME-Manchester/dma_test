@@ -1,6 +1,7 @@
 app_stop 16
 app_load dma_test3.aplx all 1 16
+sleep 10
 app_sig all 16 sync0
-sleep 2
+sleep 10
 iobuf 1
 

@@ -27,6 +27,8 @@ my $ip;     # board ip
 my $board_type; # board type (3 for spinn3 or 5 for spinn5)
 my $cpu=1;
 
+my $fh;
+
 # Process the five arguments and open the connection to SpiNNaker
 # The arguments are
 #   hostname (or IP address) of the SpiNNaker system
@@ -54,6 +56,7 @@ sub probe_chips
   my ($x_max, $y_max) = @_;
   my ($x, $y);
   my $pad = pack "V4", 0, 0, 0, 0;
+  my $str;
 
   for($x=0; $x<$x_max; $x++)
   {
@@ -64,10 +67,22 @@ sub probe_chips
 
       my $rc = $spin->recv_sdp (timeout => 0.1, debug => $debug);
       if ($rc) {
-        print "$spin->{sdp_data}\n";
+  
+        $str=$spin->{sdp_data};
+        if (length($str)>4) {
+          $str = substr $str, 16;
+          print "$str\n";
+          print $fh "$str\n";
+        }
+        else
+        {
+          print "# No reply ($x,$y)\n";
+          print $fh "# No reply ($x,$y)\n";
+        }
       }
       else {
         print "# No reply ($x,$y)\n";
+        print $fh "# No reply ($x,$y)\n";
       }
     }
   }
@@ -80,6 +95,11 @@ sub probe_chips
 sub main
 {
   process_args();
+
+  my $date=`date +%Y%m%d_%H%M%S`;
+  chomp($date);
+
+  open($fh, '>', "sdram_err_b".$num_boards."_".$date.".log") or die "Could not open file!";
 
   if ($board_type==5) {
     if ($num_boards==1) {
@@ -112,6 +132,9 @@ sub main
   else {
     die "Board type can only be 3 or 5.\n";
   }
+
+  # close 
+  close $fh;
 
 }
 

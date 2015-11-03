@@ -26,13 +26,14 @@
 
 //  1 rep = 0.437s (average)
 #define HOURS_24					200000
+//#define DMA_REPS          300
 //#define DMA_REPS            8000 // 1 hr
 //#define DMA_REPS           65000 // 8 hrs
 //#define DMA_REPS					HOURS_24     // 24 hrs
-#define	DMA_REPS					(HOURS_24*2) // 48 hrs
+//#define	DMA_REPS					(HOURS_24*2) // 48 hrs
 //#define	DMA_REPS					(HOURS_24*3) // 72 hrs
 //#define	DMA_REPS					(HOURS_24*4) // 96 hrs
-//#define	DMA_REPS					(HOURS_24_5) // 120 hrs
+#define	DMA_REPS					(HOURS_24*5) // 120 hrs
 
 // Block size in words (4 bytes each)
 #define BLOCK_SIZE         1000
@@ -500,7 +501,7 @@ void process_sdp(uint m, uint port)
 {
   sdp_msg_t *msg = (sdp_msg_t *) m;
   int s_len;
-  char s[100], s_tmp[20], time_s[20];
+  char s[256], s_tmp[20], time_s[20];
   
   swap_sdp_hdr(msg);
 
@@ -516,6 +517,12 @@ void process_sdp(uint m, uint port)
   {
     ftoa(1.0*errors[i].ticks/TIMER_CONV, time_s, 2);
     io_printf(s_tmp, "%s,%d,", time_s, errors[i].block_id);
+    
+    // Too many errors
+    // *** Modify this to be able to send multiple sdp messages
+    if (strlen(s_tmp)+strlen(s)>255)
+    	break;
+
     strcat(s, s_tmp);
   }
   //delete last comma
@@ -523,12 +530,10 @@ void process_sdp(uint m, uint port)
 
   s_len = strlen(s);
   spin1_memcpy(msg->data, (void *)s, s_len);
-
   msg->length = sizeof(sdp_hdr_t) + sizeof(cmd_hdr_t) + s_len;
-	(void) spin1_send_sdp_msg (msg, 10);
+	(void)spin1_send_sdp_msg (msg, 10);
 
 	spin1_msg_free (msg);
-
 }
 
 void swap_sdp_hdr (sdp_msg_t *msg)

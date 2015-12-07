@@ -37,7 +37,7 @@ my $fh;
 #   core number on the SpiNNaker chip
 sub process_args
 {
-  die "usage: sdp_ping <hostname>  <board type (3/5)> <num boards>\n" unless
+  die "usage: sdp_ping <ip>  <board type (3/5)> <num boards>\n" unless
     $#ARGV == 2 &&
     $ARGV[1] =~ /^\d+$/ &&
     $ARGV[2] =~ /^\d+$/;

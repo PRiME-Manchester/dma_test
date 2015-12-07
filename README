@@ -23,8 +23,12 @@ boot scamp.boot spin5-24x12.conf
 @ dma_test3.ybug
 
 # To boot and reset a 120 board machine, remember:
-ybug 192.168.x.1 -bmp 192.168.x.0/0-119
+ybug 10.2.225.1 -bmp 10.2.225.0/0-23
 reset
 boot scamp.boot spin-105.conf
 @ dma_test3.ybug
 
+# Command to use to just print out the problem chips (and potential SDRAM errors)
+./sdp_ping.pl 10.2.225.1 5 120 | egrep -v '*,0$'
+
+# 105 machine behind cspc276.cs.man.ac.uk

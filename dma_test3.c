@@ -25,7 +25,7 @@
 #define TIMER_TICK_PERIOD  10000
 
 //  1 rep = 0.437s (average)
-#define HOURS_24					200000
+//#define HOURS_24					200000
 //#define DMA_REPS          300
 //#define DMA_REPS            8000 // 1 hr
 //#define DMA_REPS           65000 // 8 hrs
@@ -33,7 +33,8 @@
 //#define	DMA_REPS					(HOURS_24*2) // 48 hrs
 //#define	DMA_REPS					(HOURS_24*3) // 72 hrs
 //#define	DMA_REPS					(HOURS_24*4) // 96 hrs
-#define	DMA_REPS					(HOURS_24*5) // 120 hrs
+//#define	DMA_REPS					(HOURS_24*5) // 120 hrs
+#define DMA_REPS          2000 // 15 mins
 
 // Block size in words (4 bytes each)
 #define BLOCK_SIZE         1000
@@ -41,7 +42,9 @@
 // MEM_SIZE in words (4 bytes each)
 // This is equivalent to   112,112,000 bytes if BLOCK_SIZE=1000
 #define MEM_SIZE           (long long)((BLOCK_SIZE+1)*28000)
-#define MEM_VALUE          0x5f5f5f5f
+//#define MEM_VALUE          0x5f5f5f5f
+//#define MEM_VALUE          0x00000000
+#define MEM_VALUE          0xffffffff
 #define ERR_VALUE          0x0f0f0f0f
 #define NUM_FAULTS         5
 
